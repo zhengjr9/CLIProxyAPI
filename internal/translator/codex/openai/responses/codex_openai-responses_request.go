@@ -1,6 +1,8 @@
 package responses
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 
 	"github.com/tidwall/gjson"
@@ -32,6 +34,7 @@ func ConvertOpenAIResponsesRequestToCodex(modelName string, inputRawJSON []byte,
 
 	// Convert role "system" to "developer" in input array to comply with Codex API requirements.
 	rawJSON = convertSystemRoleToDeveloper(rawJSON)
+	rawJSON = normalizeInputCallIDs(rawJSON)
 
 	return rawJSON
 }
@@ -57,4 +60,54 @@ func convertSystemRoleToDeveloper(rawJSON []byte) []byte {
 	}
 
 	return result
+}
+
+func normalizeInputCallIDs(rawJSON []byte) []byte {
+	inputResult := gjson.GetBytes(rawJSON, "input")
+	if !inputResult.IsArray() {
+		return rawJSON
+	}
+
+	result := rawJSON
+	callIDMap := map[string]string{}
+	for i, item := range inputResult.Array() {
+		callID := item.Get("call_id").String()
+		if callID == "" {
+			continue
+		}
+		normalized := normalizeCallID(callID, callIDMap)
+		if normalized == callID {
+			continue
+		}
+		path := fmt.Sprintf("input.%d.call_id", i)
+		result, _ = sjson.SetBytes(result, path, normalized)
+	}
+	return result
+}
+
+func normalizeCallID(id string, cache map[string]string) string {
+	const limit = 64
+	if id == "" || len(id) <= limit {
+		return id
+	}
+	if cache != nil {
+		if short, ok := cache[id]; ok {
+			return short
+		}
+	}
+	sum := sha256.Sum256([]byte(id))
+	hash := hex.EncodeToString(sum[:])
+	prefix := "call_"
+	available := limit - len(prefix)
+	if available < 0 {
+		available = 0
+	}
+	if len(hash) > available {
+		hash = hash[:available]
+	}
+	short := prefix + hash
+	if cache != nil {
+		cache[id] = short
+	}
+	return short
 }

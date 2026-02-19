@@ -7,6 +7,8 @@
 package chat_completions
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strconv"
 	"strings"
 
@@ -90,6 +92,18 @@ func ConvertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 			}
 		}
 	}
+	callIDMap := map[string]string{}
+	normalizeCallID := func(id string) string {
+		if id == "" || len(id) <= 64 {
+			return id
+		}
+		if short, ok := callIDMap[id]; ok {
+			return short
+		}
+		short := shortenCallID(id)
+		callIDMap[id] = short
+		return short
+	}
 
 	// Extract system instructions from first system message (string or text object)
 	messages := gjson.GetBytes(rawJSON, "messages")
@@ -120,7 +134,7 @@ func ConvertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 			switch role {
 			case "tool":
 				// Handle tool response messages as top-level function_call_output objects
-				toolCallID := m.Get("tool_call_id").String()
+				toolCallID := normalizeCallID(m.Get("tool_call_id").String())
 				content := m.Get("content").String()
 
 				// Create function_call_output object
@@ -198,7 +212,7 @@ func ConvertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 								// Create function_call as top-level object
 								funcCall := `{}`
 								funcCall, _ = sjson.Set(funcCall, "type", "function_call")
-								funcCall, _ = sjson.Set(funcCall, "call_id", tc.Get("id").String())
+								funcCall, _ = sjson.Set(funcCall, "call_id", normalizeCallID(tc.Get("id").String()))
 								{
 									name := tc.Get("function.name").String()
 									if short, ok := originalToolNameMap[name]; ok {
@@ -340,6 +354,24 @@ func ConvertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 
 	out, _ = sjson.Set(out, "store", false)
 	return []byte(out)
+}
+
+func shortenCallID(id string) string {
+	const limit = 64
+	if len(id) <= limit {
+		return id
+	}
+	sum := sha256.Sum256([]byte(id))
+	hash := hex.EncodeToString(sum[:])
+	prefix := "call_"
+	available := limit - len(prefix)
+	if available < 0 {
+		available = 0
+	}
+	if len(hash) > available {
+		hash = hash[:available]
+	}
+	return prefix + hash
 }
 
 // shortenNameIfNeeded applies the simple shortening rule for a single name.

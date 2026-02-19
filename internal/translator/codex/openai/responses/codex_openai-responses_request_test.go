@@ -1,6 +1,8 @@
 package responses
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/tidwall/gjson"
@@ -264,19 +266,44 @@ func TestConvertSystemRoleToDeveloper_AssistantRole(t *testing.T) {
 	}
 }
 
-func TestUserFieldDeletion(t *testing.T) {  
+func TestUserFieldDeletion(t *testing.T) {
 	inputJSON := []byte(`{  
 		"model": "gpt-5.2",  
 		"user": "test-user",  
 		"input": [{"role": "user", "content": "Hello"}]  
-	}`)  
-	  
-	output := ConvertOpenAIResponsesRequestToCodex("gpt-5.2", inputJSON, false)  
-	outputStr := string(output)  
-	  
-	// Verify user field is deleted  
-	userField := gjson.Get(outputStr, "user")  
+	}`)
+
+	output := ConvertOpenAIResponsesRequestToCodex("gpt-5.2", inputJSON, false)
+	outputStr := string(output)
+
+	// Verify user field is deleted
+	userField := gjson.Get(outputStr, "user")
 	if userField.Exists() {
 		t.Errorf("user field should be deleted, but it was found with value: %s", userField.Raw)
+	}
+}
+
+func TestConvertOpenAIResponsesRequestToCodex_CallIDShortening(t *testing.T) {
+	longID := strings.Repeat("a", 80)
+	inputJSON := []byte(fmt.Sprintf(`{
+		"model": "gpt-5.2",
+		"input": [
+			{"type": "function_call", "call_id": "%s", "name": "foo", "arguments": "{}"},
+			{"type": "function_call_output", "call_id": "%s", "output": "ok"}
+		]
+	}`, longID, longID))
+
+	output := ConvertOpenAIResponsesRequestToCodex("gpt-5.2", inputJSON, false)
+	outID1 := gjson.GetBytes(output, "input.0.call_id").String()
+	outID2 := gjson.GetBytes(output, "input.1.call_id").String()
+
+	if len(outID1) > 64 {
+		t.Fatalf("call_id length = %d, want <= 64", len(outID1))
+	}
+	if outID1 != outID2 {
+		t.Fatalf("call_id mismatch: %q vs %q", outID1, outID2)
+	}
+	if outID1 == longID {
+		t.Fatalf("call_id should be shortened, got original id")
 	}
 }
